@@ -1,0 +1,269 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2230;
+  --border: #2d3543;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #4fc3f7;
+  --accent-dim: #2b5876;
+  --error: #ff6b6b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#topbar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+#drop-zone {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+#drop-zone:hover,
+#drop-zone.dragover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+#drop-zone b {
+  color: var(--accent);
+}
+
+main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#sidebar {
+  width: 300px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.panel-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.panel-title:not(:first-child) {
+  margin-top: 14px;
+}
+
+.file-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.topic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.topic {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.topic:hover {
+  background: var(--bg);
+}
+
+.topic.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.topic-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.topic-meta {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+select,
+input[type='range'] {
+  width: 100%;
+}
+
+select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.playback {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+#play-btn {
+  background: var(--accent-dim);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#play-btn:hover {
+  background: var(--accent);
+  color: #04222f;
+}
+
+#frame-info {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stats {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stats span {
+  color: var(--muted);
+}
+
+.stats b {
+  font-weight: 500;
+  word-break: break-all;
+  text-align: right;
+}
+
+#viewer-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+#viewer {
+  position: absolute;
+  inset: 0;
+}
+
+.status {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(22, 27, 34, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  pointer-events: none;
+  max-width: 80%;
+}
+
+.status:empty {
+  display: none;
+}
+
+.status.error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.hint {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}

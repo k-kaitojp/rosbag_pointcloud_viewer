@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ROS2 PointCloud2 Viewer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <h1>ROS2 PointCloud2 Viewer</h1>
+        <label id="drop-zone" for="file-input">
+          <span class="drop-text">Drop or choose a <b>.db3</b> / <b>.mcap</b> rosbag</span>
+          <input id="file-input" type="file" accept=".db3,.mcap,.sqlite3" hidden />
+        </label>
+      </header>
+
+      <main>
+        <aside id="sidebar" hidden>
+          <div class="panel">
+            <div class="panel-title">File</div>
+            <div id="file-name" class="file-name">—</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">PointCloud2 Topics</div>
+            <ul id="topic-list" class="topic-list"></ul>
+          </div>
+
+          <div id="controls" class="panel" hidden>
+            <div class="panel-title">View</div>
+            <label class="ctl">
+              Color by
+              <select id="color-mode"></select>
+            </label>
+            <label class="ctl">
+              Point size <span id="point-size-val">0.030</span>
+              <input
+                id="point-size"
+                type="range"
+                min="0.005"
+                max="0.3"
+                step="0.005"
+                value="0.03"
+              />
+            </label>
+
+            <div class="panel-title">Playback</div>
+            <div class="playback">
+              <button id="play-btn">▶ Play</button>
+              <span id="frame-info">—</span>
+            </div>
+            <input id="timeline" type="range" min="0" max="0" value="0" />
+
+            <div id="stats" class="stats"></div>
+          </div>
+        </aside>
+
+        <section id="viewer-wrap">
+          <div id="viewer"></div>
+          <div id="status" class="status"></div>
+          <div class="hint">
+            Drag to orbit · scroll to zoom · right-drag to pan · Z is up (ROS)
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
