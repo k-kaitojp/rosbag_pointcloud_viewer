@@ -49,33 +49,29 @@ async function loadFile(file) {
     state.source = null;
   }
 
-  // 1) Read the file bytes. Large files / files changed after selection can
-  // throw NotReadableError, so read in chunks and report clearly.
-  let buf;
   try {
-    buf = await readFileBuffer(file, (p) => {
-      setStatus(`Reading ${file.name} … ${Math.round(p * 100)}%`);
-    });
-  } catch (err) {
-    console.error(err);
-    setStatus(describeReadError(err, file), true);
-    return;
-  }
+    const isSqlite = await detectSqlite(file);
 
-  // 2) Parse the bag and list topics.
-  try {
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith('.mcap')) {
-      state.source = await McapSource.open(buf);
-    } else if (lower.endsWith('.db3') || lower.endsWith('.sqlite3')) {
-      state.source = await Db3Source.open(buf);
+    if (isSqlite) {
+      // .db3 is read lazily (page-on-demand) so multi-GB bags work without
+      // loading the whole file into memory.
+      state.source = await Db3Source.open(file, {
+        onProgress: (p) =>
+          setStatus(`Indexing ${file.name} … ${Math.round(p * 100)}%`),
+      });
     } else {
-      // Heuristic: SQLite files start with "SQLite format 3\0".
-      const head = new Uint8Array(buf.slice(0, 16));
-      const isSqlite = String.fromCharCode(...head).startsWith('SQLite format 3');
-      state.source = isSqlite
-        ? await Db3Source.open(buf)
-        : await McapSource.open(buf);
+      // .mcap is currently read fully into memory.
+      let buf;
+      try {
+        buf = await readFileBuffer(file, (p) =>
+          setStatus(`Reading ${file.name} … ${Math.round(p * 100)}%`),
+        );
+      } catch (err) {
+        console.error(err);
+        setStatus(describeReadError(err, file), true);
+        return;
+      }
+      state.source = await McapSource.open(buf);
     }
 
     dom.fileName.textContent = file.name;
@@ -88,11 +84,25 @@ async function loadFile(file) {
       setStatus('No sensor_msgs/msg/PointCloud2 topics found in this bag.', true);
     } else {
       setStatus(`Found ${topics.length} PointCloud2 topic(s). Select one to view.`);
-      selectTopic(topics[0]);
+      await selectTopic(topics[0]);
     }
   } catch (err) {
     console.error(err);
-    setStatus(`Failed to parse bag: ${err.message}`, true);
+    setStatus(`${describeReadError(err, file)}`, true);
+  }
+}
+
+// Detect a SQLite file by its 16-byte magic header. Falls back to extension
+// if the small header read fails.
+async function detectSqlite(file) {
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith('.mcap')) return false;
+  if (lower.endsWith('.db3') || lower.endsWith('.sqlite3')) return true;
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    return String.fromCharCode(...head).startsWith('SQLite format 3');
+  } catch {
+    return false;
   }
 }
 
@@ -163,7 +173,7 @@ function renderTopicList(topics) {
   }
 }
 
-function selectTopic(topic) {
+async function selectTopic(topic) {
   state.topic = topic;
   stopPlayback();
 
@@ -171,7 +181,6 @@ function selectTopic(topic) {
     li.classList.toggle('active', String(li.dataset.id) === String(topic.id));
   }
 
-  setStatus(`Indexing "${topic.name}" …`);
   state.frames = state.source.listFrames(topic.id);
   state.frameIndex = 0;
 
@@ -184,16 +193,29 @@ function selectTopic(topic) {
   dom.timeline.max = String(state.frames.length - 1);
   dom.timeline.value = '0';
 
-  showFrame(0, /*frameCamera=*/ true);
+  await showFrame(0, /*frameCamera=*/ true);
   setStatus('');
 }
 
-function showFrame(index, frameCamera = false) {
+let frameLoadToken = 0;
+
+async function showFrame(index, frameCamera = false) {
   const frame = state.frames[index];
   if (!frame) return;
   state.frameIndex = index;
+  dom.timeline.value = String(index);
 
-  const raw = state.source.getFrameData(state.topic.id, frame);
+  const token = ++frameLoadToken;
+  let raw;
+  try {
+    raw = await state.source.getFrameData(state.topic.id, frame);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Could not read message for frame ${index}: ${err.message}`, true);
+    return;
+  }
+  // A newer frame request superseded this one (e.g. fast scrubbing).
+  if (token !== frameLoadToken) return;
   if (!raw) {
     setStatus(`Could not read message for frame ${index}.`, true);
     return;
@@ -219,7 +241,6 @@ function showFrame(index, frameCamera = false) {
   viewer.showCloud(extracted);
   if (frameCamera) viewer.frameCloud(extracted.bounds);
 
-  dom.timeline.value = String(index);
   updateFrameInfo(extracted);
 }
 
@@ -269,19 +290,29 @@ function startPlayback() {
   if (state.frames.length <= 1) return;
   state.playing = true;
   dom.playBtn.textContent = '⏸ Pause';
+
   const fps = 10;
-  state.playTimer = setInterval(() => {
+  const minInterval = 1000 / fps;
+  // Self-scheduling loop: load each frame fully before advancing, so slow
+  // (lazy-read) frames slow playback rather than overlapping.
+  const tick = async () => {
+    if (!state.playing) return;
+    const start = performance.now();
     let next = state.frameIndex + 1;
     if (next >= state.frames.length) next = 0;
-    showFrame(next);
-  }, 1000 / fps);
+    await showFrame(next);
+    if (!state.playing) return;
+    const elapsed = performance.now() - start;
+    state.playTimer = setTimeout(tick, Math.max(0, minInterval - elapsed));
+  };
+  state.playTimer = setTimeout(tick, minInterval);
 }
 
 function stopPlayback() {
   state.playing = false;
   if (dom.playBtn) dom.playBtn.textContent = '▶ Play';
   if (state.playTimer) {
-    clearInterval(state.playTimer);
+    clearTimeout(state.playTimer);
     state.playTimer = null;
   }
 }
