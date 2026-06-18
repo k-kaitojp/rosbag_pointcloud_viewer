@@ -12,6 +12,7 @@
 - 📦 **ROS2 Humble の rosbag に対応**
   - `.db3`（SQLite3, Humble のデフォルトストレージ）
   - `.mcap`（無圧縮 / lz4 / zstd 圧縮チャンク対応）
+- 🐘 **大容量 `.db3` 対応（数GB）** — ファイル全体を読み込まず、SQLite のページを**必要な分だけ遅延読み込み**するため、2〜3GB 級の bag もメモリを使い切らずに開けます
 - 🧩 **CDR デシリアライズを内蔵** — `PointCloud2` を直接デコード（外部 ROS 環境不要）
 - 🎨 **カラーリング切り替え** — 高さ(Z) / X / Y 軸グラデーション、埋め込み RGB、`intensity` など任意フィールド、単色
 - ▶️ **タイムライン再生** — スライダーでフレーム送り、再生 / 一時停止
@@ -87,7 +88,8 @@ https://k-kaitojp.github.io/rosbag_pointcloud_viewer/
 
 ```
 ファイル選択
-  ├─ .db3  → sql.js (WASM SQLite) で topics / messages テーブルを読む
+  ├─ .db3  → 自作の遅延 SQLite リーダーで topics / messages を読む
+  │           （File.slice() で必要なページだけ取得 → 数GBでも低メモリ）
   └─ .mcap → @mcap/core でストリーム読み出し（@mcap/support で解凍）
         ↓
   serialized message (CDR)
@@ -98,30 +100,50 @@ https://k-kaitojp.github.io/rosbag_pointcloud_viewer/
   src/viewer.js      … three.js で BufferGeometry の Points として描画
 ```
 
+`.db3`（SQLite）は **ファイル全体を読み込みません**。SQLite ファイルフォーマット
+（ページ / B-tree / レコード / オーバーフローページ）を直接パースし、`File.slice()`
+で必要なページだけを取り出します。トピック選択時に `messages` テーブルの B-tree を
+一度だけ走査してフレーム索引を作り（巨大な BLOB を含むオーバーフローページはスキップ）、
+表示するフレームの点群データだけをその都度取得します。これにより 2〜3GB 級の bag でも
+メモリ消費は数MB程度に収まります。
+
 主要ファイル:
 
 | ファイル | 役割 |
 | --- | --- |
 | `src/cdr.js` | 最小 CDR リーダー（ROS2 シリアライズ形式） |
 | `src/pointcloud2.js` | `PointCloud2` デコードと点群抽出 |
-| `src/sources/db3.js` | `.db3`（SQLite3）読み出し |
+| `src/sqlite/reader.js` | 遅延読み込み SQLite リーダー（ページ / B-tree / オーバーフロー） |
+| `src/sources/db3.js` | `.db3`（rosbag2 スキーマ）読み出し |
 | `src/sources/mcap.js` | `.mcap` 読み出し |
 | `src/viewer.js` | three.js による 3D 表示・カラーリング |
 | `src/main.js` | UI とアプリ全体の制御 |
 
 ## テスト / Test
 
-合成した `PointCloud2` メッセージをデコードしてバイトレベルの正しさを検証します。
-
 ```bash
 npm test
 ```
 
+- `test/decode.test.mjs` — 合成 `PointCloud2` メッセージのバイトレベルなデコード検証
+- `test/sqlite.test.mjs` — sql.js が生成した rosbag2 スキーマの DB に対し、遅延 SQLite リーダーがトピック一覧・フレーム索引・BLOB 取得（オーバーフローページ含む）を正しく行うか検証
+
+## トラブルシューティング / Troubleshooting
+
+**`Could not read ... NotReadableError` / 「ファイルを読み取れませんでした」**
+
+- ファイルが **選択後に移動・上書き** されると発生します（記録中の bag など）。読み込み直してください。
+- **OneDrive / Google Drive / ネットワークドライブ（SMB）** 上のファイルはブラウザが読めないことがあります。**ローカルフォルダにコピー**してから選択してください。
+- `.db3` は遅延読み込みのためサイズ上限は実質ありませんが、ファイルが選択後に移動・上書きされると発生します。ローカルにコピーして再選択してください。
+- `.mcap` は現状ファイル全体をメモリに読み込むため、巨大な `.mcap` では発生し得ます（`.db3` は影響を受けません）。
+
 ## 制限事項 / Limitations
 
-- 大きな rosbag はファイル全体をメモリに読み込みます（ブラウザのメモリに依存）。
+- **`.db3`（SQLite）**: ページ単位の遅延読み込みのため、数GB級の大容量 bag でも低メモリで開けます。
+- **`.mcap`**: 現状はファイル全体をメモリに読み込みます（大容量 mcap 非対応）。大容量で mcap を使う場合は `.db3` での記録を推奨します。
 - `.mcap` の圧縮チャンクは解凍 WASM の読み込みが必要です（`@mcap/support`）。
 - 表示は単一トピックの単一フレームごとです（複数トピックの同時重ね合わせは未対応）。
+- 1 フレームの点群は `position`/`color` 属性として GPU に載せるため、極端に巨大な単一クラウド（数千万点〜）は描画が重くなる場合があります。
 
 ## ライセンス / License
 

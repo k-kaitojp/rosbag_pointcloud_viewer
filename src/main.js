@@ -9,6 +9,7 @@ const el = (id) => document.getElementById(id);
 const dom = {
   fileInput: el('file-input'),
   dropZone: el('drop-zone'),
+  dropOverlay: el('drop-overlay'),
   sidebar: el('sidebar'),
   fileName: el('file-name'),
   topicList: el('topic-list'),
@@ -49,19 +50,28 @@ async function loadFile(file) {
   }
 
   try {
-    const buf = await file.arrayBuffer();
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith('.mcap')) {
-      state.source = await McapSource.open(buf);
-    } else if (lower.endsWith('.db3') || lower.endsWith('.sqlite3')) {
-      state.source = await Db3Source.open(buf);
+    const isSqlite = await detectSqlite(file);
+
+    if (isSqlite) {
+      // .db3 is read lazily (page-on-demand) so multi-GB bags work without
+      // loading the whole file into memory.
+      state.source = await Db3Source.open(file, {
+        onProgress: (p) =>
+          setStatus(`Indexing ${file.name} … ${Math.round(p * 100)}%`),
+      });
     } else {
-      // Heuristic: SQLite files start with "SQLite format 3\0".
-      const head = new Uint8Array(buf.slice(0, 16));
-      const isSqlite = String.fromCharCode(...head).startsWith('SQLite format 3');
-      state.source = isSqlite
-        ? await Db3Source.open(buf)
-        : await McapSource.open(buf);
+      // .mcap is currently read fully into memory.
+      let buf;
+      try {
+        buf = await readFileBuffer(file, (p) =>
+          setStatus(`Reading ${file.name} … ${Math.round(p * 100)}%`),
+        );
+      } catch (err) {
+        console.error(err);
+        setStatus(describeReadError(err, file), true);
+        return;
+      }
+      state.source = await McapSource.open(buf);
     }
 
     dom.fileName.textContent = file.name;
@@ -74,12 +84,80 @@ async function loadFile(file) {
       setStatus('No sensor_msgs/msg/PointCloud2 topics found in this bag.', true);
     } else {
       setStatus(`Found ${topics.length} PointCloud2 topic(s). Select one to view.`);
-      selectTopic(topics[0]);
+      await selectTopic(topics[0]);
     }
   } catch (err) {
     console.error(err);
-    setStatus(`Failed to read bag: ${err.message}`, true);
+    setStatus(`${describeReadError(err, file)}`, true);
   }
+}
+
+// Detect a SQLite file by its 16-byte magic header. Falls back to extension
+// if the small header read fails.
+async function detectSqlite(file) {
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith('.mcap')) return false;
+  if (lower.endsWith('.db3') || lower.endsWith('.sqlite3')) return true;
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    return String.fromCharCode(...head).startsWith('SQLite format 3');
+  } catch {
+    return false;
+  }
+}
+
+// Reads a File into an ArrayBuffer. For large files we read in chunks via
+// Blob.slice() instead of a single Blob.arrayBuffer() call, which can throw
+// NotReadableError in some browsers once the blob exceeds a size threshold.
+async function readFileBuffer(file, onProgress) {
+  const CHUNK = 128 * 1024 * 1024; // 128 MB
+  if (file.size <= CHUNK) {
+    return await file.arrayBuffer();
+  }
+
+  let out;
+  try {
+    out = new Uint8Array(file.size);
+  } catch (e) {
+    throw new RangeError(
+      `File is too large to load into memory in the browser (${formatBytes(
+        file.size,
+      )}).`,
+    );
+  }
+
+  let offset = 0;
+  while (offset < file.size) {
+    const end = Math.min(offset + CHUNK, file.size);
+    const chunk = await file.slice(offset, end).arrayBuffer();
+    out.set(new Uint8Array(chunk), offset);
+    offset = end;
+    if (onProgress) onProgress(offset / file.size);
+  }
+  return out.buffer;
+}
+
+function describeReadError(err, file) {
+  const size = formatBytes(file.size);
+  if (err && err.name === 'NotReadableError') {
+    return (
+      `Could not read "${file.name}" (${size}). ` +
+      `The file may have been moved/modified after selection, may be on a ` +
+      `synced or network drive (OneDrive/Google Drive/SMB), or may be too ` +
+      `large for the browser. Copy it to a local folder and re-select it.`
+    );
+  }
+  if (err instanceof RangeError) {
+    return err.message;
+  }
+  return `Failed to read "${file.name}" (${size}): ${err.message}`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 function renderTopicList(topics) {
@@ -95,7 +173,7 @@ function renderTopicList(topics) {
   }
 }
 
-function selectTopic(topic) {
+async function selectTopic(topic) {
   state.topic = topic;
   stopPlayback();
 
@@ -103,7 +181,6 @@ function selectTopic(topic) {
     li.classList.toggle('active', String(li.dataset.id) === String(topic.id));
   }
 
-  setStatus(`Indexing "${topic.name}" …`);
   state.frames = state.source.listFrames(topic.id);
   state.frameIndex = 0;
 
@@ -116,16 +193,29 @@ function selectTopic(topic) {
   dom.timeline.max = String(state.frames.length - 1);
   dom.timeline.value = '0';
 
-  showFrame(0, /*frameCamera=*/ true);
+  await showFrame(0, /*frameCamera=*/ true);
   setStatus('');
 }
 
-function showFrame(index, frameCamera = false) {
+let frameLoadToken = 0;
+
+async function showFrame(index, frameCamera = false) {
   const frame = state.frames[index];
   if (!frame) return;
   state.frameIndex = index;
+  dom.timeline.value = String(index);
 
-  const raw = state.source.getFrameData(state.topic.id, frame);
+  const token = ++frameLoadToken;
+  let raw;
+  try {
+    raw = await state.source.getFrameData(state.topic.id, frame);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Could not read message for frame ${index}: ${err.message}`, true);
+    return;
+  }
+  // A newer frame request superseded this one (e.g. fast scrubbing).
+  if (token !== frameLoadToken) return;
   if (!raw) {
     setStatus(`Could not read message for frame ${index}.`, true);
     return;
@@ -151,7 +241,6 @@ function showFrame(index, frameCamera = false) {
   viewer.showCloud(extracted);
   if (frameCamera) viewer.frameCloud(extracted.bounds);
 
-  dom.timeline.value = String(index);
   updateFrameInfo(extracted);
 }
 
@@ -201,19 +290,29 @@ function startPlayback() {
   if (state.frames.length <= 1) return;
   state.playing = true;
   dom.playBtn.textContent = '⏸ Pause';
+
   const fps = 10;
-  state.playTimer = setInterval(() => {
+  const minInterval = 1000 / fps;
+  // Self-scheduling loop: load each frame fully before advancing, so slow
+  // (lazy-read) frames slow playback rather than overlapping.
+  const tick = async () => {
+    if (!state.playing) return;
+    const start = performance.now();
     let next = state.frameIndex + 1;
     if (next >= state.frames.length) next = 0;
-    showFrame(next);
-  }, 1000 / fps);
+    await showFrame(next);
+    if (!state.playing) return;
+    const elapsed = performance.now() - start;
+    state.playTimer = setTimeout(tick, Math.max(0, minInterval - elapsed));
+  };
+  state.playTimer = setTimeout(tick, minInterval);
 }
 
 function stopPlayback() {
   state.playing = false;
   if (dom.playBtn) dom.playBtn.textContent = '▶ Play';
   if (state.playTimer) {
-    clearInterval(state.playTimer);
+    clearTimeout(state.playTimer);
     state.playTimer = null;
   }
 }
@@ -225,19 +324,37 @@ dom.fileInput.addEventListener('change', (e) => {
   if (file) loadFile(file);
 });
 
-['dragenter', 'dragover'].forEach((ev) =>
-  dom.dropZone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dom.dropZone.classList.add('dragover');
-  }),
-);
-['dragleave', 'drop'].forEach((ev) =>
-  dom.dropZone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dom.dropZone.classList.remove('dragover');
-  }),
-);
-dom.dropZone.addEventListener('drop', (e) => {
+// Whole-window drag & drop. A counter handles dragenter/dragleave firing on
+// nested elements so the overlay doesn't flicker.
+let dragDepth = 0;
+
+const hasFiles = (e) =>
+  e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dom.dropOverlay.hidden = false;
+});
+
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+
+window.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dom.dropOverlay.hidden = true;
+});
+
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dom.dropOverlay.hidden = true;
   const file = e.dataTransfer.files[0];
   if (file) loadFile(file);
 });
