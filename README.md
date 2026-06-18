@@ -40,6 +40,28 @@ npm run preview
 ブラウザで開いたら、画面右上の領域に rosbag ファイルをドラッグ&ドロップ
 （またはクリックして選択）してください。
 
+## GitHub Pages での公開 / Deploy to GitHub Pages
+
+本ツールは静的サイトとして **GitHub Pages（github.io）で動作します**。
+`SharedArrayBuffer` を必要としない実装のため、追加のヘッダ設定なしでそのままホスティングできます。
+
+公開URL（このリポジトリの場合）:
+
+```
+https://k-kaitojp.github.io/rosbag_pointcloud_viewer/
+```
+
+### 初回の有効化手順
+
+1. このブランチを `main` にマージ（または GitHub の **Actions → Deploy to GitHub Pages → Run workflow** で手動実行）
+2. リポジトリの **Settings → Pages → Build and deployment → Source** を **「GitHub Actions」** に設定
+3. `.github/workflows/deploy.yml` が自動で `npm ci → npm run build → dist/ を Pages へデプロイ` します
+4. 数十秒〜数分後に上記URLで公開されます
+
+以降、`main` へ push するたびに自動で再デプロイされます。
+独自ドメインやユーザーサイト（`<user>.github.io`）でもそのまま動作します
+（アセットは相対パスで出力されるため `base` 設定の変更は不要です）。
+
 ## 使い方 / Usage
 
 1. **ファイルを開く**: `.db3` または `.mcap` をドロップ
